@@ -2,10 +2,38 @@ import argparse
 import glob
 import os
 import csv
+import json
 
 import numpy as np
 import cv2
 from tqdm import tqdm
+
+
+def export_bounding_box(args, contour, filename, mask, subdir):
+    x, y, w, h = cv2.boundingRect(contour)
+    x_min = x
+    x_max = x + w
+    y_min = y
+    y_max = y_min + h
+    if args.debug:
+        rect_on_mask = mask.copy()
+        cv2.rectangle(rect_on_mask, (x_min, y_min), (x_max, y_max), thickness=3, color=255)
+        cv2.imshow("bbox", rect_on_mask)
+        cv2.waitKey(0)
+    with open(os.path.join(args.output_dir, subdir, filename[:-3] + "json"), "w") as json_file:
+        json.dump({"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}, fp=json_file)
+
+
+def export_instance_mask(args, contour_idx, imagefile, label, single_instance, subdir):
+    if args.debug:
+        print("instance " + label["label"] + "_" + str(contour_idx))
+        cv2.imshow("instance", single_instance)
+        cv2.waitKey(0)
+
+    filename = os.path.basename(imagefile[:-4] + "_" + label["label"] +
+                                "_" + str(contour_idx) + ".png")
+    cv2.imwrite(os.path.join(args.output_dir, subdir, filename), single_instance)
+    return filename
 
 
 def do_parsing():
@@ -16,6 +44,7 @@ def do_parsing():
     parser.add_argument("--labels_path", required=True, type=str,
                         help="Path to pbtxt labels file description which depends on the dataset")
     parser.add_argument("--output_dir", required=False, type=str, help="Export directory for PNG labels")
+    parser.add_argument("--export_bbox", action="store_true", help="Export bounding boxes in json format")
     parser.add_argument("--debug", action="store_true", help="Show image")
     args = parser.parse_args()
     return args
@@ -75,7 +104,7 @@ def main():
             mask = cv2.inRange(image_bgr, label["color"], label["color"])
 
             ret, thresh = cv2.threshold(mask, 127, 255, 0)
-            _, contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            _, contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
             if args.debug:
                 cv2.imshow("debug", mask)
@@ -95,25 +124,29 @@ def main():
 
                         contour_idx = contour_idx + 1
 
-                        if args.debug:
-                            print("instance " + label["label"] + "_" + str(contour_idx))
-                            cv2.imshow("instance", single_instance)
-                            cv2.waitKey(0)
+                        filename = export_instance_mask(args, contour_idx, imagefile, label, single_instance, subdir)
 
-                        filename = os.path.basename(imagefile[:-4] + "_" + label["label"] +
-                                                    "_" + str(contour_idx) + ".png")
-
-                        cv2.imwrite(os.path.join(args.output_dir, subdir, filename), single_instance)
+                        if args.export_bbox:
+                            export_bounding_box(args, contour, filename, mask, subdir)
 
             else:
-                # Face has inner shapes, ugly solution use directly with if-else
-                if args.debug:
-                    print("instance " + label["label"])
-                    cv2.imshow("instance", mask)
-                    cv2.waitKey(0)
 
-                filename = os.path.basename(imagefile[:-4] + "_" + label["label"] + "_" + str(1) + ".png")
-                cv2.imwrite(os.path.join(args.output_dir, subdir, filename), mask)
+                # Face has inner shapes, ugly solution use directly with if-else
+                contour_idx = 1
+
+                filename = export_instance_mask(args, contour_idx, imagefile, label, mask, subdir)
+
+                # Find biggest contour (face contour)
+                max_area = 0
+                biggest_contour = None
+                for contour in contours:
+                    area = cv2.contourArea(contour)
+                    if area > max_area:
+                        biggest_contour = contour
+                        max_area = area
+
+                if args.export_bbox:
+                    export_bounding_box(args, biggest_contour, filename, mask, subdir)
 
     print("Success")
 
